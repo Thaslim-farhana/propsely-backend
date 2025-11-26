@@ -36,7 +36,7 @@ from flask_cors import CORS
 CORS(app, resources={
     r"/api/*": {
         "origins": [
-            "https://proposely.vercel.app",
+            "https://proposely-front.vercel.app",
             "https://proposely.lovable.app",
             "http://localhost:5173"
         ],
