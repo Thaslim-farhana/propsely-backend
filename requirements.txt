@@ -3,6 +3,7 @@ flask-cors
 flask-jwt-extended
 flask-sqlalchemy
 python-dotenv
+werkzeug
 reportlab
 boto3
 stripe
