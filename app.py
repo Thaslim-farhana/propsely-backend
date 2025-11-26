@@ -16,7 +16,8 @@ import io
 import uuid
 import traceback
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
+
 
 from flask import (
     Flask,
@@ -28,31 +29,8 @@ from flask import (
     current_app,
 )
 from werkzeug.utils import secure_filename
-
 from dotenv import load_dotenv
-
 from flask_cors import CORS
-
-CORS(app, resources={
-    r"/api/*": {
-        "origins": [
-            "https://proposely-front.vercel.app",
-            "https://proposely.lovable.app",
-            "http://localhost:5173"
-        ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
-@app.after_request
-def after_request(response):
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-    response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-    return response
-
-
-
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager,
@@ -115,7 +93,9 @@ R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 
 os.makedirs(PDF_OUTPUT_DIR, exist_ok=True)
 
+# ---------------------
 # Flask app
+# ---------------------
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
 app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
@@ -123,21 +103,57 @@ app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["PDF_OUTPUT_DIR"] = PDF_OUTPUT_DIR
 
-# CORS
+# ---------------------
+# CORS – allow your frontends
+# ---------------------
+
+# default allowed origins (can override with ALLOWED_ORIGINS env)
+default_origins = [
+    "https://proposely.vercel.app",
+    "https://proposely-front.vercel.app",
+    "https://proposely.lovable.app",
+    "http://localhost:5173",
+]
+
 if ALLOWED_ORIGINS:
     origins = [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
-    CORS(app, resources={r"/api/*": {"origins": origins}})
 else:
-    if FLASK_ENV == "development":
-        CORS(app)
-    else:
-        CORS(app, resources={r"/api/*": {"origins": "*"}})
+    origins = default_origins
 
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": origins,
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+        }
+    },
+)
+
+
+@app.after_request
+def after_request(response):
+    # Extra safety for preflight
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add(
+        "Access-Control-Allow-Headers", "Content-Type,Authorization"
+    )
+    response.headers.add(
+        "Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS"
+    )
+    return response
+
+
+# ---------------------
 # DB & JWT
+# ---------------------
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
+# ---------------------
 # R2 client
+# ---------------------
 _r2_client: Optional[boto3.client] = None
 if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_ENDPOINT_URL and R2_BUCKET_NAME:
     try:
@@ -159,11 +175,10 @@ if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_ENDPOINT_URL and R2_BUCKET_N
 else:
     app.logger.info("R2 not configured; falling back to local file storage.")
 
+
 # ---------------------
 # Models
 # ---------------------
-
-
 class User(db.Model):
     __tablename__ = "users"
 
@@ -197,11 +212,10 @@ class Proposal(db.Model):
 with app.app_context():
     db.create_all()
 
+
 # ---------------------
 # Utility: base URL
 # ---------------------
-
-
 def get_base_url() -> str:
     global BASE_URL
     if BASE_URL:
@@ -215,8 +229,6 @@ def get_base_url() -> str:
 # ---------------------
 # AI Proposal Generator
 # ---------------------
-
-
 def generate_proposal_text(data: dict) -> str:
     """
     data keys: client_name, project_title, scope, budget, timeline, tone, notes
@@ -284,7 +296,6 @@ Once this proposal is approved, we will finalize the timeline and begin the onbo
 """
 
     try:
-        # Using ChatCompletion-style call; update if your OpenAI client is different
         completion = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -320,11 +331,10 @@ Thank you, {client_name}, for considering us.
 We can adjust this proposal as needed to best fit your goals.
 """
 
+
 # ---------------------
 # PDF builder + R2 helpers
 # ---------------------
-
-
 def build_pdf_bytes_from_content(title: str, content: str) -> bytes:
     """
     Very simple multi-page PDF builder from plain text content.
@@ -383,7 +393,9 @@ def presign_r2_key(key: str, expires_in: int = 60 * 60 * 24) -> str:
         raise
 
 
-def store_pdf_and_get_url(pdf_bytes: bytes, filename: str) -> (str, str):
+from typing import Optional, Tuple
+
+def store_pdf_and_get_url(pdf_bytes: bytes, filename: str) -> Tuple[str, str]:
     """
     Stores PDF bytes in R2 if available, otherwise locally.
     Returns (pdf_filename, pdf_url).
@@ -392,18 +404,23 @@ def store_pdf_and_get_url(pdf_bytes: bytes, filename: str) -> (str, str):
     safe_filename = secure_filename(filename) or f"proposal_{uid}.pdf"
     key = f"proposals/{safe_filename}"
 
+
     download_url = None
     if _r2_client:
         try:
             upload_bytes_to_r2(pdf_bytes, key)
             download_url = presign_r2_key(key)
         except Exception as e:
-            app.logger.exception("R2 upload/presign failed, falling back to local: %s", e)
+            app.logger.exception(
+                "R2 upload/presign failed, falling back to local: %s", e
+            )
             download_url = None
 
     if not download_url:
         try:
-            filepath = os.path.join(current_app.config["PDF_OUTPUT_DIR"], safe_filename)
+            filepath = os.path.join(
+                current_app.config["PDF_OUTPUT_DIR"], safe_filename
+            )
             with open(filepath, "wb") as f:
                 f.write(pdf_bytes)
             base = get_base_url()
@@ -415,11 +432,10 @@ def store_pdf_and_get_url(pdf_bytes: bytes, filename: str) -> (str, str):
 
     return safe_filename, download_url
 
+
 # ---------------------
 # Health
 # ---------------------
-
-
 @app.route("/health", methods=["GET"])
 @app.route("/api/health", methods=["GET"])
 def health():
@@ -431,11 +447,10 @@ def health():
         }
     )
 
+
 # ---------------------
 # Auth routes
 # ---------------------
-
-
 @app.route("/api/auth/register", methods=["POST"])
 def register():
     data = request.get_json() or {}
@@ -457,7 +472,8 @@ def register():
     db.session.add(user)
     db.session.commit()
 
-    token = create_access_token(identity=user.id)
+    # identity as string to avoid 422 issues
+    token = create_access_token(identity=str(user.id))
 
     return jsonify(
         {
@@ -480,7 +496,7 @@ def login():
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({"message": "Invalid credentials"}), 401
 
-    token = create_access_token(identity=user.id)
+    token = create_access_token(identity=str(user.id))
 
     return jsonify(
         {
@@ -493,18 +509,17 @@ def login():
 @app.route("/api/auth/me", methods=["GET"])
 @jwt_required()
 def me():
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
         return jsonify({"message": "User not found"}), 404
 
     return jsonify({"id": user.id, "email": user.email, "plan": user.plan})
 
+
 # ---------------------
 # Proposals routes
 # ---------------------
-
-
 @app.route("/api/proposals/generate", methods=["POST"])
 @jwt_required()
 def proposals_generate():
@@ -523,7 +538,9 @@ def proposals_generate():
         tb = traceback.format_exc()
         app.logger.exception("Proposal generation failed: %s", e)
         return (
-            jsonify({"message": "Generation failed", "details": str(e), "traceback": tb}),
+            jsonify(
+                {"message": "Generation failed", "details": str(e), "traceback": tb}
+            ),
             500,
         )
 
@@ -534,7 +551,7 @@ def proposals_create():
     """
     Step 3 – Save proposal & create PDF.
     """
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
         return jsonify({"message": "User not found"}), 404
@@ -591,7 +608,7 @@ def proposals_create():
 @app.route("/api/proposals/all", methods=["GET"])
 @jwt_required()
 def proposals_all():
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     proposals = (
         Proposal.query.filter_by(user_id=user_id)
         .order_by(Proposal.created_at.desc())
@@ -613,7 +630,7 @@ def proposals_all():
 @app.route("/api/proposals/<int:proposal_id>", methods=["GET"])
 @jwt_required()
 def proposals_get_one(proposal_id):
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     proposal = Proposal.query.filter_by(id=proposal_id, user_id=user_id).first()
     if not proposal:
         return jsonify({"message": "Not found"}), 404
@@ -632,14 +649,16 @@ def proposals_get_one(proposal_id):
 @app.route("/api/proposals/<int:proposal_id>", methods=["DELETE"])
 @jwt_required()
 def proposals_delete(proposal_id):
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     proposal = Proposal.query.filter_by(id=proposal_id, user_id=user_id).first()
     if not proposal:
         return jsonify({"message": "Not found"}), 404
 
     # if local PDF, optionally delete file
     if proposal.pdf_filename:
-        path = os.path.join(current_app.config["PDF_OUTPUT_DIR"], proposal.pdf_filename)
+        path = os.path.join(
+            current_app.config["PDF_OUTPUT_DIR"], proposal.pdf_filename
+        )
         if os.path.isfile(path):
             try:
                 os.remove(path)
@@ -672,12 +691,16 @@ def proposals_download(proposal_id):
     - If pdf_url points to R2 (or any external HTTP), redirect
     - If local, serve the file from disk
     """
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     proposal = Proposal.query.filter_by(id=proposal_id, user_id=user_id).first()
     if not proposal:
         return jsonify({"message": "Not found"}), 404
 
-    if proposal.pdf_url and proposal.pdf_url.startswith("http") and "download/" not in proposal.pdf_url:
+    if (
+        proposal.pdf_url
+        and proposal.pdf_url.startswith("http")
+        and "download/" not in proposal.pdf_url
+    ):
         # R2 or external URL
         return redirect(proposal.pdf_url)
 
@@ -691,18 +714,17 @@ def proposals_download(proposal_id):
 
     return jsonify({"message": "PDF not available"}), 404
 
+
 # ---------------------
 # Billing (Stripe stub)
 # ---------------------
-
-
 @app.route("/api/billing/create-checkout-session", methods=["POST"])
 @jwt_required()
 def create_checkout_session():
     if not STRIPE_SECRET_KEY:
         return jsonify({"message": "Stripe not configured"}), 400
 
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
         return jsonify({"message": "User not found"}), 404
@@ -764,11 +786,9 @@ def stripe_webhook():
 # ---------------------
 # Main
 # ---------------------
-
 if __name__ == "__main__":
     app.run(
         debug=(FLASK_ENV == "development"),
         host="0.0.0.0",
         port=int(os.getenv("PORT", "5000")),
     )
-
