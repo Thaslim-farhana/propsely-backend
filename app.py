@@ -32,6 +32,27 @@ from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
 from flask_cors import CORS
+
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "https://proposely.vercel.app",
+            "https://proposely.lovable.app",
+            "http://localhost:5173"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
+@app.after_request
+def after_request(response):
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+    response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+    return response
+
+
+
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager,
