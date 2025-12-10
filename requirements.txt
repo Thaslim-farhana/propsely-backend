@@ -1,13 +1,7 @@
-flask
-flask-cors
-flask-jwt-extended
-flask-sqlalchemy
+fastapi
+uvicorn[standard]
+fpdf
 python-dotenv
-werkzeug
-reportlab
-boto3
-stripe
-openai
-psycopg2-binary
-gunicorn
+pydantic
+
 
